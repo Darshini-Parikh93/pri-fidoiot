@@ -4,15 +4,25 @@
 package org.fido.iot.storage;
 
 import static org.junit.jupiter.api.Assertions.fail;
-
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.UUID;
+import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.apache.commons.dbcp2.BasicDataSource;
+import org.fido.iot.sample.DeviceServiceInfoModule;
+import org.fido.iot.sample.DeviceServiceInfoSequence;
+import org.fido.iot.serviceinfo.ServiceInfo;
+import org.fido.iot.serviceinfo.ServiceInfoEntry;
+import org.fido.iot.serviceinfo.ServiceInfoMarshaller;
 import org.h2.tools.Server;
 import org.junit.jupiter.api.Test;
 import org.fido.iot.certutils.PemLoader;
@@ -35,6 +45,7 @@ public class To2StorageTest {
   private static final String DB_PORT = "8043";
   private static final String DB_USER = "sa";
   private static final String DB_PASSWORD = "";
+  private static final int SERVICEINFO_MTU = 1300;
 
   private static final String VOUCHER = ""
       + "8486186450f0956089c0df4c349c61f460457e87eb8185820567302e302e302e3082024400000000820419cb9"
@@ -111,6 +122,24 @@ public class To2StorageTest {
       "target", "data",
       "ops").toString();
 
+  private static final String packageContent =
+      "#!/bin/bash\r\n"
+      + "filename=payload.bin\r\n"
+      + "cksum_tx=1612472339\r\n"
+      + "cksum_rx=$(cksum $filename | cut -d ' ' -f 1)\r\n"
+      + "if [ $cksum_tx -eq $cksum_rx  ]; then\r\n"
+      + "  echo \"Device onboarded successfully.\"\r\n"
+      + "  echo \"Device onboarded successfully.\" > result.txt\r\n"
+      + "else\r\n"
+      + "  echo \"ServiceInfo file transmission failed.\"\r\n"
+      + "  echo \"ServiceInfo file transmission failed.\" > result.txt\r\n"
+      + "fi\r\n";
+
+  String packageName = "linux64.sh";
+  String boolName = "bool";
+  String sviString = "sdo_sys:filedesc=packageName,sdo_sys:write=packageContent" +
+  ",sdo_sys:filedesc=cborBooleanId,sdo_sys:write=cborBooleanValue";
+
   final KeyResolver keyResolver = new KeyResolver() {
     @Override
     public PrivateKey getKey(PublicKey key) {
@@ -140,6 +169,17 @@ public class To2StorageTest {
     };
   }
 
+  private void insertSampleServiceInfo(UUID uuid, DataSource ds, OwnerDbManager ownerDbManager) {
+
+    ownerDbManager.addServiceInfo(ds, "packageContent", packageContent.getBytes(), false);
+    ownerDbManager.addServiceInfo(ds, "packageName", packageName.getBytes(), false);
+    ownerDbManager.addServiceInfo(ds, "cborBooleanValue", Composite.decodeHex("F5"), true);
+    ownerDbManager.addServiceInfo(ds, "cborBooleanId", boolName.getBytes(), true);
+
+    ownerDbManager.removeSviFromDevice(ds, uuid);
+    ownerDbManager.assignSviToDevice(ds, uuid, sviString);
+  }
+
   @Test
   void Test() throws Exception {
 
@@ -155,6 +195,7 @@ public class To2StorageTest {
     ds.setMaxIdle(10);
     ds.setMaxOpenPreparedStatements(100);
     CryptoService cs = new CryptoService();
+    DeviceServiceInfoModule deviceServiceInfoModule = new DeviceServiceInfoModule();
 
     To2ClientStorage to2ClientStorage = new To2ClientStorage() {
       @Override
@@ -225,15 +266,29 @@ public class To2StorageTest {
       }
 
       @Override
-      public Composite getReplacementHmac() {
+      public byte[] getReplacementHmacSecret(Composite newCredentials, boolean isReuse) {
         return null;
       }
 
       @Override
       public void prepareServiceInfo() {
-        Composite value = ServiceInfoEncoder.encodeValue("devmod:active", "true");
         List<Composite> list = new ArrayList<>();
-        list.add(value);
+        ServiceInfoMarshaller marshaller = new ServiceInfoMarshaller(SERVICEINFO_MTU,
+                Composite.fromObject(VOUCHER).getAsComposite(Const.OV_HEADER)
+                        .getAsUuid(Const.OVH_GUID));
+        marshaller.register(new DeviceServiceInfoModule());
+        Iterable<Supplier<ServiceInfo>> serviceInfos = marshaller.marshal();
+        for (final Iterator<Supplier<ServiceInfo>> it = serviceInfos.iterator(); it.hasNext();) {
+          ServiceInfo serviceInfo = it.next().get();
+            // Convert to CBOR now
+            Iterator<ServiceInfoEntry> marshalledEntries = serviceInfo.iterator();
+            while (marshalledEntries.hasNext()) {
+              ServiceInfoEntry marshalledEntry = marshalledEntries.next();
+              Composite innerArray = ServiceInfoEncoder.encodeValue(marshalledEntry.getKey(),
+                      marshalledEntry.getValue().getContent());
+              list.add(innerArray);
+            }
+          }
         toOwnerInfo = ServiceInfoEncoder.encodeDeviceServiceInfo(list, false);
       }
 
@@ -247,7 +302,13 @@ public class To2StorageTest {
 
       @Override
       public void setServiceInfo(Composite info, boolean isMore, boolean isDone) {
-
+        //Length field is zero as it will not be used by putServiceInfo.
+        deviceServiceInfoModule.putServiceInfo(
+                Composite.fromObject(VOUCHER).getAsComposite(Const.OV_HEADER)
+                        .getAsUuid(Const.OVH_GUID),
+                new ServiceInfoEntry(info.getAsString(Const.FIRST_KEY),
+                        new DeviceServiceInfoSequence(info.getAsString(Const.FIRST_KEY),
+                                info.getAsBytes(Const.SECOND_KEY), 0)));
       }
     };
 
@@ -297,6 +358,9 @@ public class To2StorageTest {
       OwnerDbManager dbsManager = new OwnerDbManager();
       dbsManager.createTables(ds);
       dbsManager.importVoucher(ds, Composite.fromObject(VOUCHER));
+      insertSampleServiceInfo(Composite.fromObject(VOUCHER)
+          .getAsComposite(Const.OV_HEADER)
+          .getAsUuid(Const.OVH_GUID), ds, dbsManager);
 
       DispatchResult dr = to2ClientService.getHelloMessage();
 
@@ -315,6 +379,13 @@ public class To2StorageTest {
     } finally {
       if (server != null) {
         server.stop();
+      }
+      try {
+        // cleanup serviceinfo files that were created during test execution
+        Files.deleteIfExists(Paths.get(System.getProperty("user.dir"), packageName));
+        Files.deleteIfExists(Paths.get(System.getProperty("user.dir"), boolName));
+      } catch (IOException e) {
+        // ignore
       }
     }
   }

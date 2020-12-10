@@ -6,6 +6,7 @@ package org.fido.iot.protocol;
 import java.nio.ByteBuffer;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.interfaces.ECKey;
 
 /**
  * Extends Ownership vouchers.
@@ -40,6 +41,7 @@ public class VoucherExtensionService {
     headerInfo.flip();
     Composite hdrHash = cryptoService.hash(hashType, Composite.unwrap(headerInfo));
     Composite prevHash;
+    PublicKey prevOwnerPubKey;
     //For the first entry, the hash is SHA[TO2.ProveOPHdr.OVHeader|\|TO2.ProveOPHdr.HMac].
     Composite entries = voucher.getAsComposite(Const.OV_ENTRIES);
     if (entries.size() == 0) {
@@ -50,19 +52,26 @@ public class VoucherExtensionService {
       prevInfo.put(macBytes);
       prevInfo.flip();
       prevHash = cryptoService.hash(hashType, Composite.unwrap(prevInfo));
+      prevOwnerPubKey = cryptoService.decode(voucher.getAsComposite(Const.OV_HEADER)
+          .getAsComposite(Const.OVH_PUB_KEY));
     } else {
       Composite prev = entries.getAsComposite(entries.size() - 1);
       Composite prevEntry = Composite.fromObject(prev.getAsBytes(Const.COSE_SIGN1_PAYLOAD));
-      prevHash = prevEntry.getAsComposite(Const.OVE_HASH_PREV_ENTRY);
-      hdrHash = cryptoService.hash(hashType, prev.toBytes());
+      prevHash = cryptoService.hash(hashType, prev.toBytes());
+      prevOwnerPubKey = cryptoService.decode(prevEntry.getAsComposite(Const.OVE_PUB_KEY));
     }
 
     Composite payload = Composite.newArray();
 
     payload.set(Const.OVE_HASH_PREV_ENTRY, prevHash);
     payload.set(Const.OVE_HASH_HDR_INFO, hdrHash);
-    payload.set(Const.OVE_PUB_KEY, cryptoService.encode(newOwner, Const.PK_ENC_COSEEC));
-    Composite cos = cryptoService.sign(prevOwner, payload.toBytes());
+    Composite ownerPubkey = ovh.getAsComposite(Const.OVH_PUB_KEY);
+    final int ownerKeyEnc = ownerPubkey.getAsNumber(Const.PK_ENC).intValue();
+    payload.set(Const.OVE_PUB_KEY, cryptoService.encode(
+            newOwner,
+            ownerKeyEnc));
+    Composite cos = cryptoService.sign(
+        prevOwner, payload.toBytes(), cryptoService.getCoseAlgorithm(prevOwnerPubKey));
 
     //The current recommended maximum is ten entries.
     entries.set(entries.size(), cos);

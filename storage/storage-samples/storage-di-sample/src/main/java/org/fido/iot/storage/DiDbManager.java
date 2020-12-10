@@ -26,14 +26,14 @@ public class DiDbManager {
 
       String sql = "CREATE TABLE IF NOT EXISTS "
           + "MT_DEVICES("
-          + "GUID CHAR(36) PRIMARY KEY, "
-          + "SERIAL_NO VARCHAR(255), "
+          + "GUID CHAR(36), "
+          + "SERIAL_NO VARCHAR(255) PRIMARY KEY, "
           + "VOUCHER BLOB, "
           + "CUSTOMER_ID INT NULL DEFAULT NULL, "
           + "M_STRING BLOB, "
           + "STARTED TIMESTAMP, "
           + "COMPLETED TIMESTAMP NULL DEFAULT NULL, "
-          + "PRIMARY KEY ( GUID), "
+          + "PRIMARY KEY ( SERIAL_NO), "
           + "UNIQUE ( SERIAL_NO), "
           + "UNIQUE ( GUID)"
           + ");";
@@ -70,7 +70,7 @@ public class DiDbManager {
                 + "ID,"
                 + "CERTIFICATE_VALIDITY_DAYS,"
                 + "RENDEZVOUS_INFO) "
-                + "VALUES (1,'3650','http://localhost:8040?ipaddress=127.0.0.1');";
+                + "VALUES (1,'3650','http://localhost:8040?ipaddress=127.0.0.1&ownerport=8040');";
             stmt.executeUpdate(sql);
           }
 
@@ -123,6 +123,51 @@ public class DiDbManager {
       pstmt.setInt(1, id);
       pstmt.setString(2, name);
       pstmt.setString(3, keys);
+      pstmt.executeUpdate();
+
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Assign customer ID to voucher having the input GUID.
+   * 
+   * @param ds The datasource to use.
+   * @param id The id of the customer.
+   * @param guid The GUID of the device
+   */
+  public void assignCustomerToVoucher(DataSource ds, int id, String guid) {
+
+    String sql = ""
+        + "UPDATE MT_DEVICES   "
+        + "SET CUSTOMER_ID=? "
+        + "WHERE GUID=?; ";
+
+    try (Connection conn = ds.getConnection();
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      pstmt.setInt(1, id);
+      pstmt.setString(2, guid);
+      pstmt.executeUpdate();
+
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Assign customer ID to voucher having the input GUID.
+   *
+   * @param ds The datasource to use.
+   * @param rvInfo The GUID of the device
+   */
+  public void addRvInfo(DataSource ds, String rvInfo) {
+
+    String sql = "" + "UPDATE MT_SETTINGS   " + "SET RENDEZVOUS_INFO=? " + "WHERE ID=1; ";
+
+    try (Connection conn = ds.getConnection();
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      pstmt.setString(1, rvInfo);
       pstmt.executeUpdate();
 
     } catch (SQLException e) {

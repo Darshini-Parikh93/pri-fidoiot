@@ -1,33 +1,36 @@
 <?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+     Copyright 2020 Intel Corporation
+     SPDX-License-Identifier: Apache 2.0
+-->
+
 <project xmlns="http://maven.apache.org/POM/4.0.0"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
   <parent>
     <artifactId>fido-iot</artifactId>
     <groupId>org.fido</groupId>
-    <version>1.9</version>
+    <version>0.3</version>
   </parent>
 
-  <modelVersion>4.0.0</modelVersion>
-
+  <name>Protocol Core</name>
   <artifactId>protocol</artifactId>
   <groupId>org.fido.iot</groupId>
   <packaging>jar</packaging>
-
 
   <properties>
     <jakson.dataformat.cbor.version>2.11.0</jakson.dataformat.cbor.version>
     <jackson-datatype-jdk8.version>2.11.0</jackson-datatype-jdk8.version>
     <commons-codec.version>1.14</commons-codec.version>
-    <tomcat.version>9.0.24</tomcat.version>
-    <bcprov.version>1.65.01</bcprov.version>
+    <tomcat.version>9.0.40</tomcat.version>
+    <bcprov.version>1.66</bcprov.version>
     <bcpkix.version>1.65</bcpkix.version>
   </properties>
 
-
-
   <dependencies>
-
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -37,7 +40,7 @@
     <dependency>
       <groupId>org.fido.iot</groupId>
       <artifactId>cert-utils</artifactId>
-      <version>1.9</version>
+      <version>0.3</version>
       <scope>test</scope>
     </dependency>
 
@@ -50,11 +53,15 @@
 
     <dependency>
       <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk15on</artifactId>
+      <version>${bcprov.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
       <artifactId>bcpkix-jdk15on</artifactId>
       <version>${bcpkix.version}</version>
       <scope>test</scope>
     </dependency>
-
   </dependencies>
-
 </project>

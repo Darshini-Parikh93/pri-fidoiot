@@ -78,7 +78,7 @@ public class To2Test extends BaseTemplate {
       }
 
       @Override
-      public Composite getReplacementHmac() {
+      public byte[] getReplacementHmacSecret(Composite newCredentials, boolean isReuse) {
         return null;
       }
 
@@ -158,7 +158,7 @@ public class To2Test extends BaseTemplate {
 
     To2ServerStorage serverStorage = new To2ServerStorage() {
       @Override
-      public PrivateKey geOwnerSigningKey(PublicKey key) {
+      public PrivateKey getOwnerSigningKey(PublicKey key) {
         return PemLoader.loadPrivateKey(ownerKeyPem);
       }
 
@@ -215,11 +215,6 @@ public class To2Test extends BaseTemplate {
       }
 
       @Override
-      public Composite getSigInfoB(Composite sigInfoA) {
-        return sigInfoA;
-      }
-
-      @Override
       public Composite getReplacementRvInfo() {
         return null;
       }
@@ -235,7 +230,7 @@ public class To2Test extends BaseTemplate {
       }
 
       @Override
-      public void setReplacementHmac(Composite hmac) {
+      public void setReplacementHmac(byte[] hmac) {
 
       }
 
@@ -290,6 +285,31 @@ public class To2Test extends BaseTemplate {
       @Override
       public void failed(Composite request, Composite reply) {
 
+      }
+
+      @Override
+      public void storeVoucher(Composite voucher) {
+      }
+
+      @Override
+      public void discardReplacementOwnerKey() {
+      }
+
+      @Override
+      public byte[] getReplacementHmac() {
+        return null;
+      }
+
+      public Composite getSigInfoA() {
+        return null;
+      }
+
+      @Override
+      public boolean getOwnerResaleSupport() {
+        return true;
+      }
+  
+      public void setSigInfoA(Composite sigInfoA) {
       }
     };
 

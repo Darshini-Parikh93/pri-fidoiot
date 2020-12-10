@@ -21,7 +21,7 @@ public class Ec256Test {
   @Test
   void Test() throws Exception {
 
-    SecureRandom random = new SecureRandom();
+    SecureRandom random = SecureRandom.getInstanceStrong();
     ECGenParameterSpec ecSpec = new ECGenParameterSpec(Const.SECP256R1_CURVE_NAME);
     KeyPairGenerator kg = KeyPairGenerator.getInstance(Const.EC_ALG_NAME);
     kg.initialize(ecSpec, random);
@@ -41,12 +41,12 @@ public class Ec256Test {
     PublicKey p2 = service.decode(pub);
     assertTrue(service.compare(publicKey, p2) == 0);
 
-    Composite cos = service.sign(privateKey, payload);
+    Composite cos = service.sign(privateKey, payload, service.getCoseAlgorithm(privateKey));
 
-    assertTrue(service.verify(publicKey, cos));
+    assertTrue(service.verify(publicKey, cos, null));
 
     payload = service.getRandomBytes(15);
     cos.set(Const.COSE_SIGN1_PAYLOAD, payload);
-    assertFalse(service.verify(publicKey, cos));
+    assertFalse(service.verify(publicKey, cos, null));
   }
 }

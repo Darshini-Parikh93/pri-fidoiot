@@ -5,6 +5,7 @@ package org.fido.iot.protocol;
 
 import java.io.IOException;
 import java.security.PublicKey;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,7 +27,7 @@ public abstract class To2ServerService extends MessagingService {
     Composite sigInfoA = body.getAsComposite(Const.FIFTH_KEY);
 
     Composite ownerState = getCryptoService()
-        .getKeyExchangeMessage(kexName, Const.KEY_EXCHANGE_A);
+        .getKeyExchangeMessage(kexName, Const.KEY_EXCHANGE_A, null);
 
     getStorage().setOwnerState(ownerState);
     getStorage().setCipherName(cipherName);
@@ -39,11 +40,12 @@ public abstract class To2ServerService extends MessagingService {
         .set(Const.SECOND_KEY, voucher.getAsComposite(Const.OV_ENTRIES).size())
         .set(Const.THIRD_KEY, voucher.getAsComposite(Const.OV_HMAC))
         .set(Const.FOURTH_KEY, nonce5)
-        .set(Const.FIFTH_KEY, getStorage().getSigInfoB(sigInfoA))
+        .set(Const.FIFTH_KEY, getCryptoService().getSigInfoB(sigInfoA))
         .set(Const.SIXTH_KEY, ownerState.getAsBytes(Const.FIRST_KEY));
 
     byte[] nonce6 = getCryptoService().getRandomBytes(Const.NONCE16_SIZE);
     getStorage().setNonce6(nonce6);
+    getStorage().setSigInfoA(sigInfoA);
     Composite ownerKey = getCryptoService().getOwnerPublicKey(voucher);
     Composite uph = Composite.newMap()
         .set(Const.CUPH_NONCE, nonce6)
@@ -53,8 +55,9 @@ public abstract class To2ServerService extends MessagingService {
     PublicKey ownerPublicKey = getCryptoService().decode(pubEncKey);
     Composite cose = null;
     try (CloseableKey key = new CloseableKey(
-        getStorage().geOwnerSigningKey(ownerPublicKey))) {
-      cose = getCryptoService().sign(key.get(), payload.toBytes());
+        getStorage().getOwnerSigningKey(ownerPublicKey))) {
+      cose = getCryptoService().sign(
+          key.get(), payload.toBytes(), getCryptoService().getCoseAlgorithm(ownerPublicKey));
     } catch (IOException e) {
       throw new DispatchException(e);
     }
@@ -92,8 +95,9 @@ public abstract class To2ServerService extends MessagingService {
     Composite body = request.getAsComposite(Const.SM_BODY);
 
     Composite voucher = getStorage().getVoucher();
+    Composite sigInfoA = getStorage().getSigInfoA();
     PublicKey deviceKey = getCryptoService().getDevicePublicKey(voucher);
-    if (!getCryptoService().verify(deviceKey, body)) {
+    if (!getCryptoService().verify(deviceKey, body, sigInfoA)) {
       throw new InvalidMessageException();
     }
 
@@ -103,8 +107,11 @@ public abstract class To2ServerService extends MessagingService {
     Composite iotClaim = payload.getAsComposite(Const.EAT_SDO_IOT);
     byte[] kexB = iotClaim.getAsBytes(Const.FIRST_KEY);
 
+    Composite pubEncKey = getCryptoService().getOwnerPublicKey(voucher);
+    PublicKey ownerPublicKey = getCryptoService().decode(pubEncKey);
     byte[] devSecret = getCryptoService().getSharedSecret(kexB,
-        getStorage().getOwnerState());
+        getStorage().getOwnerState(), getStorage().getOwnerSigningKey(ownerPublicKey));
+
     Composite cipherState = getCryptoService().getEncryptionState(devSecret,
         getStorage().getCipherName());
     getStorage().setOwnerState(cipherState);
@@ -114,10 +121,28 @@ public abstract class To2ServerService extends MessagingService {
     getStorage().setNonce7(nonce7);
 
     payload = Composite.newArray();
-    payload.set(Const.FIRST_KEY, getStorage().getReplacementRvInfo());
-    payload.set(Const.SECOND_KEY, getStorage().getReplacementGuid());
-    payload.set(Const.THIRD_KEY, getStorage().getNonce6());
-    payload.set(Const.FOURTH_KEY, getStorage().getReplacementOwnerKey());
+
+    // TO-DO: revisit this approach of triggering reuse in case of null entries from storage
+    Composite replacementRvInfo = getStorage().getReplacementRvInfo();
+    if (replacementRvInfo == null) {
+      Composite ovh = voucher.getAsComposite(Const.OV_HEADER);
+      replacementRvInfo = ovh.getAsComposite(Const.OVH_RENDEZVOUS_INFO);
+    }
+
+    UUID replacementGuid = getStorage().getReplacementGuid();
+    if (replacementGuid == null) {
+      Composite ovh = voucher.getAsComposite(Const.OV_HEADER);
+      replacementGuid = ovh.getAsUuid(Const.OVH_GUID);
+    }
+    Composite replacementKey = getStorage().getReplacementOwnerKey();
+    if (replacementKey == null) {
+      replacementKey = getCryptoService().getOwnerPublicKey(voucher);
+    }
+
+    payload.set(Const.FIRST_KEY, replacementRvInfo);
+    payload.set(Const.SECOND_KEY, replacementGuid);
+    payload.set(Const.THIRD_KEY, nonce7);
+    payload.set(Const.FOURTH_KEY, replacementKey);
 
     body = getCryptoService().encrypt(
         payload.toBytes(),
@@ -135,8 +160,17 @@ public abstract class To2ServerService extends MessagingService {
 
     Object hmacObj = message.get(Const.FIRST_KEY);
     if (!hmacObj.equals(Optional.empty())) {
-      Composite hmac = Composite.fromObject(hmacObj);
-      getStorage().setReplacementHmac(hmac);
+      try {
+        // check if its Composite type
+        Composite hmac = Composite.fromObject(hmacObj);
+        getStorage().setReplacementHmac(hmac.toBytes());
+      } catch (IllegalArgumentException r) {
+        // check if its Cbor Null. if yes, set the Cbor null bytes as replacement hmac
+        // TO-DO: throw exception if comparison yields false
+        if (PrimitivesUtil.isCborNull(hmacObj)) {
+          getStorage().setReplacementHmac(PrimitivesUtil.getCborNullBytes());
+        }
+      }
     }
 
     Composite payload = Const.EMPTY_MESSAGE;
@@ -157,7 +191,9 @@ public abstract class To2ServerService extends MessagingService {
             getCryptoService().decrypt(body, getStorage().getOwnerState()));
 
     boolean isMore = message.getAsBoolean(Const.FIRST_KEY);
-    Composite sviValues = message.getAsComposite(Const.SECOND_KEY);
+    Composite svi = message.getAsComposite(Const.SECOND_KEY);
+    Composite sviValues = svi.size() > 0 ? svi.getAsComposite(Const.FIRST_KEY)
+        : Composite.newArray();
 
     for (int i = 0; i < sviValues.size(); i++) {
       Composite sviValue = sviValues.getAsComposite(i);
@@ -181,6 +217,30 @@ public abstract class To2ServerService extends MessagingService {
 
     getCryptoService().verifyBytes(nonce6, getStorage().getNonce6());
 
+    Composite voucher = getStorage().getVoucher();
+    Composite ovh = voucher.getAsComposite(Const.OV_HEADER);
+    Composite pubKey = getCryptoService().getOwnerPublicKey(voucher);
+    // if reuse, do nothing.
+    // create replacement ownership voucher otherwise
+    if (!isReuseSelected(ovh, pubKey)) {
+      // replacement info being set in the replacement voucher header
+      ovh.set(Const.OVH_GUID, getStorage().getReplacementGuid());
+      ovh.set(Const.OVH_RENDEZVOUS_INFO, getStorage().getReplacementRvInfo());
+      ovh.set(Const.OVH_PUB_KEY, getStorage().getReplacementOwnerKey());
+
+      // check if owner supports Resale
+      // if supported, replacement hmac is set in the replacement voucher
+      // if not supported, replacement hmac is discarded
+      if (getStorage().getOwnerResaleSupport() && getStorage().getReplacementHmac() != null) {
+        voucher.set(Const.OV_HMAC, Composite.fromObject(getStorage().getReplacementHmac()));
+      } else {
+        voucher.set(Const.OV_HMAC, PrimitivesUtil.getCborNullBytes());
+        getStorage().discardReplacementOwnerKey();
+      }
+      voucher.set(Const.OV_ENTRIES, Composite.newArray());
+      getStorage().storeVoucher(voucher);
+    }
+
     Composite payload = Composite.newArray()
         .set(Const.FIRST_KEY, getStorage().getNonce7());
 
@@ -195,6 +255,19 @@ public abstract class To2ServerService extends MessagingService {
   protected void doError(Composite request, Composite reply) {
     reply.clear();
     getStorage().failed(request, reply);
+  }
+
+  private boolean isReuseSelected(Composite ovh, Composite pubKey) {
+    if (Arrays.equals(PrimitivesUtil.getCborNullBytes(), getStorage().getReplacementHmac())
+        && ovh.getAsUuid(Const.OVH_GUID).equals(getStorage().getReplacementGuid())
+        && (null != getStorage().getReplacementRvInfo()
+        && Arrays.equals(ovh.getAsComposite(Const.OVH_RENDEZVOUS_INFO).toBytes(),
+            getStorage().getReplacementRvInfo().toBytes()))
+        && (null != getStorage().getReplacementOwnerKey()
+        && Arrays.equals(pubKey.toBytes(), getStorage().getReplacementOwnerKey().toBytes()))) {
+      return true;
+    }
+    return false;
   }
 
   @Override

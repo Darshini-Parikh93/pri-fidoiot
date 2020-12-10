@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.security.GeneralSecurityException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.InvalidParameterException;
@@ -39,13 +40,17 @@ import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -57,6 +62,11 @@ import javax.crypto.Mac;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.jce.spec.ECNamedCurveSpec;
+
+import org.fido.iot.protocol.epid.EpidMaterialService;
+import org.fido.iot.protocol.epid.EpidSignatureVerifier;
 
 /**
  * Cryptography Service.
@@ -65,7 +75,9 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public class CryptoService {
 
-  private final SecureRandom secureRandom;
+  static final BouncyCastleProvider BCPROV = new BouncyCastleProvider();
+  private SecureRandom secureRandom;
+  private boolean epidTestMode = false;
 
   /**
    * Constructs a CryptoService from a list of algorithm names.
@@ -87,7 +99,11 @@ public class CryptoService {
     }
     // no algorithm found in priority list
     if (rnd == null) {
-      rnd = new SecureRandom();
+      try {
+        rnd = SecureRandom.getInstanceStrong();
+      } catch (NoSuchAlgorithmException e) {
+        throw new RuntimeException(e);
+      }
     }
     secureRandom = rnd;
   }
@@ -96,7 +112,19 @@ public class CryptoService {
    * Constructs a CryptoService using default secure random number generator.
    */
   public CryptoService() {
-    secureRandom = new SecureRandom();
+    try {
+      secureRandom = SecureRandom.getInstanceStrong();
+    } catch (NoSuchAlgorithmException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Sets the epid test mode.
+   *
+   */
+  public void setEpidTestMode() {
+    this.epidTestMode = true;
   }
 
   /**
@@ -161,11 +189,13 @@ public class CryptoService {
 
   protected Cipher getCipherInstance(String algName)
       throws NoSuchPaddingException, NoSuchAlgorithmException {
-    if (algName.equals(Const.AES128_CTR_HMAC256_ALG_NAME)) {
-      return Cipher.getInstance("AES/CTR/NoPadding");
+    switch (algName) {
+      case Const.AES128_CTR_HMAC256_ALG_NAME:
+      case Const.AES256_CTR_HMAC384_ALG_NAME:
+        return Cipher.getInstance("AES/CTR/NoPadding");
+      default:
+        throw new CryptoServiceException(new NoSuchAlgorithmException());
     }
-
-    throw new CryptoServiceException(new NoSuchAlgorithmException());
   }
 
   protected String getHashAlgorithm(int algId) throws NoSuchAlgorithmException {
@@ -222,12 +252,16 @@ public class CryptoService {
       int bitLength = ((ECKey) key).getParams().getCurve().getField().getFieldSize();
       if (bitLength == Const.BIT_LEN_256) {
         return Const.COSE_ES256;
-      }
-      if (bitLength == Const.BIT_LEN_384) {
+      } else if (bitLength == Const.BIT_LEN_384) {
         return Const.COSE_ES384;
       }
-      //} else if (key instanceof RSAKey) {
-      //todo: rsa key size
+    } else if (key instanceof RSAKey) {
+      int bitLength = ((RSAKey) key).getModulus().bitLength();
+      if (Const.BIT_LEN_2K == bitLength) {
+        return Const.COSE_RS256;
+      } else if (Const.BIT_LEN_3K == bitLength) {
+        return Const.COSE_RS384;
+      }
     }
     throw new RuntimeException(new NoSuchAlgorithmException());
   }
@@ -270,6 +304,17 @@ public class CryptoService {
       if (bitLength == Const.BIT_LEN_384) {
         return Composite.newArray()
             .set(Const.SG_TYPE, Const.PK_SECP384R1)
+            .set(Const.SG_INFO, Const.EMPTY_BYTE);
+      }
+    } else if (key instanceof RSAKey) {
+      int bitLength = ((RSAKey)key).getModulus().bitLength();
+      if (Const.BIT_LEN_2K == bitLength) {
+        return Composite.newArray()
+            .set(Const.SG_TYPE, Const.PK_RSA2048RESTR)
+            .set(Const.SG_INFO, Const.EMPTY_BYTE);
+      } else if (Const.BIT_LEN_3K == bitLength) {
+        return Composite.newArray()
+            .set(Const.SG_TYPE, Const.PK_RSA)
             .set(Const.SG_INFO, Const.EMPTY_BYTE);
       }
     }
@@ -370,7 +415,11 @@ public class CryptoService {
       }
     } else if (key instanceof RSAPublicKey) {
       int bitLength = ((RSAPublicKey) key).getModulus().bitLength();
-      //todo:  find in RSA type for EPID keys
+      if (2 * 1024 == bitLength) {
+        return Const.SHA_256;
+      } else {
+        return Const.SHA_384;
+      }
     }
     throw new RuntimeException(new InvalidKeyException());
   }
@@ -393,9 +442,33 @@ public class CryptoService {
       }
     } else if (key instanceof RSAPublicKey) {
       int bitLength = ((RSAPublicKey) key).getModulus().bitLength();
-      //todo: file in RSA type for EPID
+      if (2 * 1024 == bitLength) {
+        return Const.HMAC_SHA_256;
+      } else {
+        return Const.HMAC_SHA_384;
+      }
     }
     throw new CryptoServiceException(new NoSuchAlgorithmException());
+  }
+
+  /**
+   * Returns actual signature.
+   *
+   * @param sigInfoA initial device based information
+   * @return signature
+   */
+  public Composite getSigInfoB(Composite sigInfoA) {
+    if (null != sigInfoA && sigInfoA.size() > 0
+            && Arrays.asList(Const.SG_EPIDv10, Const.SG_EPIDv11)
+            .contains(sigInfoA.getAsNumber(Const.FIRST_KEY).intValue())) {
+      EpidMaterialService epidMaterialService = new EpidMaterialService();
+      try {
+        return epidMaterialService.getSigInfo(sigInfoA);
+      } catch (IOException ioException) {
+        throw new RuntimeException(ioException);
+      }
+    }
+    return sigInfoA;
   }
 
   protected byte[] adjustBigBuffer(byte[] buffer, int byteLength) {
@@ -427,6 +500,7 @@ public class CryptoService {
     final Composite pm = Composite.newArray();
     pm.set(Const.PK_ENC, encType);
     switch (encType) {
+
       case Const.PK_ENC_COSEEC: {
 
         final ECPublicKey ec = (ECPublicKey) publicKey;
@@ -447,9 +521,21 @@ public class CryptoService {
         } else {
           throw new CryptoServiceException(new InvalidKeyException());
         }
-
         pm.set(Const.PK_BODY, body);
 
+      }
+      break;
+      case Const.PK_ENC_CRYPTO: {
+        RSAPublicKey key = (RSAPublicKey) publicKey;
+        final ByteBuffer mod = ByteBuffer.wrap(key.getModulus().toByteArray());
+        final ByteBuffer exp = ByteBuffer.wrap(key.getPublicExponent().toByteArray());
+
+        Composite pkbody = Composite.newArray()
+                .set(Const.FIRST_KEY, mod)
+                .set(Const.SECOND_KEY, exp);
+
+        pm.set(Const.PK_BODY, pkbody);
+        pm.set(Const.PK_TYPE, getPublicKeyType(publicKey));
       }
       break;
       case Const.PK_ENC_X509: {
@@ -458,7 +544,7 @@ public class CryptoService {
         pm.set(Const.PK_BODY, x509.getEncoded());
         pm.set(Const.PK_TYPE, getPublicKeyType(publicKey));
       }
-      break;
+        break;
       default:
         throw new CryptoServiceException(new NoSuchAlgorithmException());
     }
@@ -475,29 +561,39 @@ public class CryptoService {
 
     final int keyType = pub.getAsNumber(Const.PK_TYPE).intValue();
     final int keyEnc = pub.getAsNumber(Const.PK_ENC).intValue();
-    final byte[] body = pub.getAsBytes(Const.PK_BODY);
 
     KeyFactory factory;
     try {
       switch (keyEnc) {
+        case Const.PK_ENC_CRYPTO:
+          Composite cryptoBody = pub.getAsComposite(Const.PK_BODY);
+          BigInteger mod = new BigInteger(1, cryptoBody.getAsBytes(Const.FIRST_KEY));
+          BigInteger exp = new BigInteger(1, cryptoBody.getAsBytes(Const.SECOND_KEY));
+
+          RSAPublicKeySpec rsaPkSpec = new RSAPublicKeySpec(mod, exp);
+          factory = getKeyFactoryInstance(getKeyFactoryAlgorithm(keyType));
+          return factory.generatePublic(rsaPkSpec);
+
         case Const.PK_ENC_X509:
-          final X509EncodedKeySpec rsaSpec = new X509EncodedKeySpec(body);
+          final byte[] x509body = pub.getAsBytes(Const.PK_BODY);
+          final X509EncodedKeySpec rsaSpec = new X509EncodedKeySpec(x509body);
           factory = getKeyFactoryInstance(getKeyFactoryAlgorithm(keyType));
 
           return factory.generatePublic(rsaSpec);
 
         case Const.PK_ENC_COSEEC:
+          final byte[] coseEecBody = pub.getAsBytes(Const.PK_BODY);
           final ByteBuffer buf509;
           if (keyType == Const.PK_SECP256R1) {
-            buf509 = ByteBuffer.allocate(Const.X509_EC256_HEADER.length + body.length);
+            buf509 = ByteBuffer.allocate(Const.X509_EC256_HEADER.length + coseEecBody.length);
             buf509.put(Const.X509_EC256_HEADER);
           } else if (keyType == Const.PK_SECP384R1) {
-            buf509 = ByteBuffer.allocate(Const.X509_EC384_HEADER.length + body.length);
+            buf509 = ByteBuffer.allocate(Const.X509_EC384_HEADER.length + coseEecBody.length);
             buf509.put(Const.X509_EC384_HEADER);
           } else {
             throw new NoSuchAlgorithmException();
           }
-          buf509.put(body);
+          buf509.put(coseEecBody);
           buf509.flip();
 
           factory = getKeyFactoryInstance(getKeyFactoryAlgorithm(keyType));
@@ -525,13 +621,52 @@ public class CryptoService {
   }
 
   /**
+   * Verifies MAROE Prefix.
+   *
+   * @param cose The COSE message
+   */
+  public void verifyMaroePrefix(Composite cose) {
+    Composite uph = cose.getAsComposite(Const.COSE_SIGN1_UNPROTECTED);
+    String maroePrefix = Composite.toString(uph.getAsBytes(Const.EAT_MAROE_PREFIX));
+    boolean isMaroePrefixValid = false;
+    for (final String maroePrefixItem : Const.MAROE_PREFIX_LIST) {
+      if (maroePrefix.equals(maroePrefixItem)) {
+        isMaroePrefixValid = true;
+        break;
+      }
+    }
+    if (!isMaroePrefixValid) {
+      throw new RuntimeException("Invalid MAROE Prefix");
+    }
+  }
+
+  /**
    * Verifies a COSE signature.
    *
    * @param verificationKey The verification key to use.
    * @param cose            The COSE message.
+   * @param sigInfoA        The sigInfo object representing eA
    * @return True if the signature matches otherwise false.
    */
-  public boolean verify(PublicKey verificationKey, Composite cose) {
+  public boolean verify(PublicKey verificationKey, Composite cose, Composite sigInfoA) {
+    if (null != sigInfoA && sigInfoA.size() > 0 && Arrays.asList(Const.SG_EPIDv10, Const.SG_EPIDv11)
+        .contains(sigInfoA.getAsNumber(Const.FIRST_KEY).intValue())) {
+      verifyMaroePrefix(cose);
+      EpidSignatureVerifier.Result verificationResult =
+              EpidSignatureVerifier.verify(cose, sigInfoA);
+      if (verificationResult == EpidSignatureVerifier.Result.VERIFIED) {
+        return true;
+      } else if (this.epidTestMode) {
+        // in test mode ignore the validation of EPID signatures but
+        // still perform the verification to check for non-signature issues
+        if (verificationResult == EpidSignatureVerifier.Result.UNKNOWN_ERROR
+                || verificationResult == EpidSignatureVerifier.Result.MALFORMED_REQUEST) {
+          return false;
+        }
+        return true;
+      }
+      return false;
+    }
     final Composite header1 = cose.getAsComposite(Const.COSE_SIGN1_PROTECTED);
     final int algId = header1.getAsNumber(Const.COSE_ALG).intValue();
     final ByteBuffer payload = cose.getAsByteBuffer(Const.COSE_SIGN1_PAYLOAD);
@@ -580,22 +715,138 @@ public class CryptoService {
   }
 
   /**
+   * Verifies certificate algorithm.
+   *
+   * @param algorithmName Public key algorithm
+   */
+  public void verifyAlgorithm(String algorithmName) throws InvalidOwnershipVoucherException {
+    if (!(algorithmName.equals(Const.EC_ALG_NAME))) {
+      throw new InvalidOwnershipVoucherException(
+          "Wrong public key algorithm inside the device certificate - supported: ECDSA, received: "
+              + algorithmName);
+    }
+  }
+
+  /**
+   * Verifies certificate public key curve.
+   *
+   * @param ecdsaCurveName ECDSA curve name
+   */
+  private void verifyCurveName(String ecdsaCurveName) throws InvalidOwnershipVoucherException {
+    if (!(ecdsaCurveName.contains(Const.SECP256R1_CURVE_NAME)
+        || ecdsaCurveName.contains(Const.PRIME256V1_CURVE_NAME)
+        || ecdsaCurveName.contains(Const.SECP384R1_CURVE_NAME))) {
+      throw new InvalidOwnershipVoucherException("Mismatch of ECDSA curve type.");
+    }
+  }
+
+  /**
+   * Verifies certificate public key size.
+   *
+   * @param pubKeySize Public key size
+   */
+  private void verifyKeySize(int pubKeySize) throws InvalidOwnershipVoucherException {
+    if (pubKeySize != Const.BIT_LEN_256 && pubKeySize != Const.BIT_LEN_384) {
+      throw new InvalidOwnershipVoucherException(
+          "Wrong public key size. Received public key size: {}." + pubKeySize);
+    }
+  }
+
+  /**
+   * Verifies leaf certificate public key in ownership voucher.
+   *
+   * @param cert leaf certificate from ownership voucher
+   */
+  private void verifyLeafPubKeyData(X509Certificate cert) throws InvalidOwnershipVoucherException {
+    String publicKeyAlgorithm = cert.getPublicKey().getAlgorithm();
+    verifyAlgorithm(publicKeyAlgorithm);
+
+    String ecdsaCurveName;
+    ECParameterSpec p = ((ECPublicKey) cert.getPublicKey()).getParams();
+    if (p instanceof ECNamedCurveSpec) {
+      ECNamedCurveSpec ncs = (ECNamedCurveSpec)p;
+      ecdsaCurveName = ncs.getName();
+    } else {
+      ecdsaCurveName = p.toString();
+    }
+
+    verifyCurveName(ecdsaCurveName);
+
+    int pubKeySize =
+        ((ECPublicKey) cert.getPublicKey()).getParams().getCurve().getField().getFieldSize();
+    verifyKeySize(pubKeySize);
+  }
+
+  /**
+   * Verifies leaf certificate in ownership voucher.
+   *
+   * @param cert leaf certificate from ownership voucher
+   */
+  private void verifyLeafCertPrivileges(X509Certificate cert)
+      throws InvalidOwnershipVoucherException {
+    if (cert.getKeyUsage() != null) {
+      if (!(cert.getKeyUsage()[0])) {
+        throw new InvalidOwnershipVoucherException(
+            "Digital signature is not allowed for the device certificate");
+      }
+    }
+  }
+
+  /**
+   * Verifies certificate chain.
+   *
+   * @param certChain ownership voucher device certificate chain
+   */
+  public void verifyCertChain(Composite certChain) {
+    LinkedList<X509Certificate> x509certs = new LinkedList<>();
+
+    try {
+      final CertPath cp = getCertPath(certChain);
+
+      for (int i = 1; i < certChain.size(); i++) {
+        X509Certificate x509Certificate = (X509Certificate) cp.getCertificates().get(i);
+        x509certs.add(x509Certificate);
+      }
+    } catch (CertificateException e) {
+      throw new CryptoServiceException(e);
+    }
+
+    X509Certificate leafCertificate = x509certs.getFirst();
+    verifyLeafPubKeyData(leafCertificate);
+    verifyLeafCertPrivileges(leafCertificate);
+  }
+
+  /**
+   * Verifies ownership voucher.
+   *
+   * @param voucher ownership voucher
+   */
+  public void verifyVoucher(Composite voucher) {
+
+    verifyHash(
+        voucher.getAsComposite(Const.OV_HEADER).getAsComposite(Const.OVH_CERT_CHAIN_HASH),
+        voucher.getAsComposite(Const.OV_DEV_CERT_CHAIN).toBytes());
+    verifyCertChain(voucher.getAsComposite(Const.OV_DEV_CERT_CHAIN));
+    verify(voucher.getAsComposite(Const.OV_DEV_CERT_CHAIN));
+  }
+
+  /**
    * Produces a COSE Signature.
    *
    * @param signingKey The signing key.
    * @param payload    The payload to sign.
+   * @param coseSignatureAlg The COSE algorithm that determines the signature algorithm.
    * @return The resulting COSE Signature.
    */
-  public Composite sign(PrivateKey signingKey, byte[] payload) {
+  public Composite sign(PrivateKey signingKey, byte[] payload, int coseSignatureAlg) {
 
-    final int algId = getCoseAlgorithm(signingKey);
     final Composite cos = Composite.newArray()
-        .set(Const.COSE_SIGN1_PROTECTED, Composite.newMap().set(Const.COSE_ALG, algId))
+        .set(Const.COSE_SIGN1_PROTECTED, Composite.newMap().set(Const.COSE_ALG, coseSignatureAlg))
         .set(Const.COSE_SIGN1_UNPROTECTED, Const.EMPTY_BYTE)
         .set(Const.COSE_SIGN1_PAYLOAD, payload);
 
     try {
-      final String algName = getSignatureAlgorithm(algId);
+      final String algName = getSignatureAlgorithm(coseSignatureAlg);
 
       final Signature signer = getSignatureInstance(algName);
       signer.initSign(signingKey);
@@ -886,15 +1137,21 @@ public class CryptoService {
    *
    * @param message  The key exchange message.
    * @param ownState The state of the key exchange.
+   * @param decryptionKey The decryption key for use in asymmetric exchanges
    * @return The shared secrete based on the state and message.
    */
-  public byte[] getSharedSecret(byte[] message, Composite ownState) {
+  public byte[] getSharedSecret(byte[] message, Composite ownState, Key decryptionKey) {
 
     final String alg = ownState.getAsString(Const.SECOND_KEY);
-    if (alg.equals(Const.ECDH_ALG_NAME)) {
-      return getEcdhSharedSecret(message, ownState);
+    switch (alg) {
+      case Const.ECDH_ALG_NAME:
+        return getEcdhSharedSecret(message, ownState);
+      case Const.ASYMKEX2048_ALG_NAME:
+      case Const.ASYMKEX3072_ALG_NAME:
+        return getAsymkexSharedSecret(message, ownState, decryptionKey);
+      default:
+        throw new CryptoServiceException(new NoSuchAlgorithmException(alg));
     }
-    throw new CryptoServiceException(new NoSuchAlgorithmException(alg));
   }
 
   /**
@@ -904,16 +1161,103 @@ public class CryptoService {
    *
    * @param kexSuiteName The name of the Key Exchange Suite.
    * @param party        The party to the Key Ecxhange (A or B)
+   * @param ownerKey     The owner key, required for some asymmetric exchanges
    * @return A composite state value with the fist key set to the message.
    */
-  public Composite getKeyExchangeMessage(String kexSuiteName, String party) {
+  public Composite getKeyExchangeMessage(String kexSuiteName, String party, Key ownerKey) {
 
-    if (kexSuiteName.equals(Const.ECDH_ALG_NAME)) {
-      return getEcdhMessage(Const.SECP256R1_CURVE_NAME, Const.ECDH_256_RANDOM_SIZE, party);
-    } else if (kexSuiteName.equals(Const.ECDH384_ALG_NAME)) {
-      return getEcdhMessage(Const.SECP384R1_CURVE_NAME, Const.ECDH_384_RANDOM_SIZE, party);
+    switch (kexSuiteName) {
+      case Const.ECDH_ALG_NAME:
+        return getEcdhMessage(Const.SECP256R1_CURVE_NAME, Const.ECDH_256_RANDOM_SIZE, party);
+      case Const.ECDH384_ALG_NAME:
+        return getEcdhMessage(Const.SECP384R1_CURVE_NAME, Const.ECDH_384_RANDOM_SIZE, party);
+      case Const.ASYMKEX2048_ALG_NAME:
+        return getAsymkexMessage(
+            Const.ASYMKEX2048_ALG_NAME, Const.ASYMKEX2048_RANDOM_SIZE, party, ownerKey);
+      case Const.ASYMKEX3072_ALG_NAME:
+        return getAsymkexMessage(
+            Const.ASYMKEX3072_ALG_NAME, Const.ASYMKEX3072_RANDOM_SIZE, party, ownerKey);
+      default:
+        throw new CryptoServiceException(new NoSuchAlgorithmException(kexSuiteName));
     }
-    throw new CryptoServiceException(new NoSuchAlgorithmException(kexSuiteName));
+  }
+
+  protected Composite getAsymkexMessage(
+      String algName, int randomSize, String party, Key encryptionKey) {
+
+    switch (party) {
+
+      case Const.KEY_EXCHANGE_A:
+
+        byte[] a = new byte[randomSize];
+        getSecureRandom().nextBytes(a);
+
+        return Composite.newArray()
+            .set(Const.FIRST_KEY, a)
+            .set(Const.SECOND_KEY, algName)
+            .set(Const.THIRD_KEY, Const.KEY_EXCHANGE_A)
+            .set(Const.FOURTH_KEY, randomSize);
+
+      case Const.KEY_EXCHANGE_B:
+
+        byte[] b = new byte[randomSize];
+        getSecureRandom().nextBytes(b);
+
+        byte[] xb;
+        try {
+          Cipher cipher = Cipher.getInstance(Const.ASYMKEX_CIPHER_NAME, BCPROV);
+          cipher.init(Cipher.ENCRYPT_MODE, encryptionKey, getSecureRandom());
+          xb = cipher.doFinal(b);
+        } catch (GeneralSecurityException e) {
+          throw new RuntimeException(e);
+        }
+
+        return Composite.newArray()
+            .set(Const.FIRST_KEY, xb)
+            .set(Const.SECOND_KEY, algName)
+            .set(Const.THIRD_KEY, Const.KEY_EXCHANGE_B)
+            .set(Const.FOURTH_KEY, randomSize)
+            .set(Const.FIFTH_KEY, b);
+
+      default:
+        throw new IllegalArgumentException(party);
+    }
+  }
+
+  protected byte[] getAsymkexSharedSecret(byte[] message, Composite ownState, Key decryptionKey) {
+
+    String party = ownState.getAsString(Const.THIRD_KEY);
+    int len = ownState.getAsNumber(Const.FOURTH_KEY).intValue();
+
+    byte[] shSe = new byte[2 * len];
+    ByteBuffer bb = ByteBuffer.wrap(shSe);
+
+    switch (party) {
+      case Const.KEY_EXCHANGE_A:
+
+        bb.put(ownState.getAsBytes(Const.FIRST_KEY));
+
+        byte[] b;
+        try {
+          Cipher cipher = Cipher.getInstance(Const.ASYMKEX_CIPHER_NAME, BCPROV);
+          cipher.init(Cipher.DECRYPT_MODE, decryptionKey, getSecureRandom());
+          b = cipher.doFinal(message);
+        } catch (GeneralSecurityException e) {
+          throw new RuntimeException(e);
+        }
+        bb.put(b);
+        break;
+
+      case Const.KEY_EXCHANGE_B:
+        bb.put(message);
+        bb.put(ownState.getAsBytes(Const.FIFTH_KEY));
+        break;
+
+      default:
+        throw new IllegalArgumentException(party);
+    }
+
+    return shSe;
   }
 
   protected Composite encryptThenMac(byte[] secret, byte[] ciphered, byte[] iv, String cipherName) {
