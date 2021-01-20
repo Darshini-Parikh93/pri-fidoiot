@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.security.PublicKey;
 import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -298,23 +299,36 @@ public abstract class To2ClientService extends DeviceService {
       newHash = getCryptoService().hash(hashType, secret, headerCopy.toBytes());
     }
 
-    Composite payload = Composite.newArray()
-        .set(Const.FIRST_KEY,
-            newHash != null ? newHash : PrimitivesUtil.getCborNullBytes());
+    Composite payload = Composite.newArray();
+    payload.set(
+        Const.FIRST_KEY,
+        newHash != null
+            ? newHash
+            : Composite.newArray().set(Const.FIRST_KEY, PrimitivesUtil.getCborNullBytes()));
+    payload.set(Const.SECOND_KEY, getStorage().getMaxOwnerServiceInfoMtuSz());
 
     body = getCryptoService().encrypt(payload.toBytes(), this.ownState);
 
-    reply.set(Const.SM_MSG_ID, Const.TO2_AUTH_DONE);
+    reply.set(Const.SM_MSG_ID, Const.TO2_DEVICE_SERVICE_INFO_READY);
     reply.set(Const.SM_BODY, body);
     getStorage().continued(request, reply);
   }
 
-  protected void doAuthDone2(Composite request, Composite reply) {
+  protected void doOwnerServiceInfoReady(Composite request, Composite reply) {
     getStorage().continuing(request, reply);
     Composite body = request.getAsComposite(Const.SM_BODY);
     Composite message = Composite.fromObject(getCryptoService().decrypt(body, this.ownState));
 
-    message.verifyMaxKey(Const.NO_KEYS);
+    int deviceMtu = 0;
+    Object maxDeviceServiceInfoSz = message.get(Const.FIRST_KEY);
+    if (!maxDeviceServiceInfoSz.equals(Optional.empty())) {
+      try {
+        deviceMtu = message.getAsNumber(Const.FIRST_KEY).intValue();
+      } catch (IllegalArgumentException r) {
+        deviceMtu = Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+      }
+    }
+    getStorage().setMaxDeviceServiceInfoMtuSz(deviceMtu);
 
     getStorage().prepareServiceInfo();
     Composite payload = getStorage().getNextServiceInfo();
@@ -386,8 +400,8 @@ public abstract class To2ClientService extends DeviceService {
       case Const.TO2_SETUP_DEVICE:
         doSetupDevice(request, reply);
         return false;
-      case Const.TO2_AUTH_DONE2:
-        doAuthDone2(request, reply);
+      case Const.TO2_OWNER_SERVICE_INFO_READY:
+        doOwnerServiceInfoReady(request, reply);
         return false;
       case Const.TO2_OWNER_SERVICE_INFO:
         doServiceInfo(request, reply);

@@ -124,6 +124,13 @@ Some required runtime arguments
 
   Docker default: ./serviceinfo/sample-svi.csv
 
+- `max.owner.svi.mtu.size`
+
+  Maximum MTU Size for ServiceInfo that owner can send to the owner.
+  If not set, default MTU size of 1300 bytes will be used for ServiceInfo transfers to owner.
+
+  Default value: 1300 bytes
+
 # Enabling Remote Access to DB
 
 Remote access to H2 Sample Storage DB has been disabled by default. Enabling the access creates a security hole in the system which makes it vulnerable to Remote Code Execution.

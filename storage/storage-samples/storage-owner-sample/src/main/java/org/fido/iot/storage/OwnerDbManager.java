@@ -59,6 +59,7 @@ public class OwnerDbManager {
           + "REPLACEMENT_RVINFO BLOB, "
           + "REPLACEMENT_HMAC BLOB, "
           + "REPLACEMENT_VOUCHER BLOB, "
+          + "SERVICE_INFO_MTU_SIZE INT NULL DEFAULT NULL, "
           + "PRIMARY KEY (GUID), "
           + "UNIQUE (GUID)"
           + ");";
@@ -139,7 +140,7 @@ public class OwnerDbManager {
     String sql = ""
         + "MERGE INTO TO2_DEVICES  "
         + "KEY (GUID) "
-        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?); ";
+        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?); ";
 
     try (Connection conn = ds.getConnection();
         PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -159,6 +160,7 @@ public class OwnerDbManager {
           .getAsComposite(Const.OVH_RENDEZVOUS_INFO).toBytes());
       pstmt.setBytes(12, null);
       pstmt.setBytes(13, null);
+      pstmt.setInt(14, 0);
 
       pstmt.executeUpdate();
 

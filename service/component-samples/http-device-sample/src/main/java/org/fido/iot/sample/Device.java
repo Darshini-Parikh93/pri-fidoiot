@@ -57,7 +57,7 @@ public class Device {
   private static final String PROPERTY_DEV_PEM = "fido.iot.pem.dev";
   private static final String PROPERTY_DI_URL = "fido.iot.url.di";
   private static final String PROPERTY_RANDOMS = "fido.iot.randoms";
-  private static final int SERVICEINFO_MTU = 1300;
+  private static final String PROPERTY_SERVICE_INFO_MTU = "fido.iot.device.service.info.mtu";
   private static boolean isServiceinfoDone;
 
   private static final Logger logger = LogManager.getLogger();
@@ -290,6 +290,14 @@ public class Device {
 
     To2ClientStorage to2Storage = new To2ClientStorage() {
 
+      int deviceServiceInfoMtuSize = 0;
+      int ownerServiceInfoMtuSize = 0;
+
+      @Override
+      public void starting(Composite request, Composite reply) {
+        setMaxOwnerServiceInfoMtuSz();
+      }
+
       @Override
       public void completed(Composite request, Composite reply) {
         logger.info("TO2 complete, GUID is " + wrappedCreds.get().getAsUuid(Const.DC_GUID));
@@ -324,13 +332,40 @@ public class Device {
       }
 
       @Override
+      public void setMaxOwnerServiceInfoMtuSz() {
+        String deviceMtuPropertyValue =
+                (System.getProperties().getProperty(PROPERTY_SERVICE_INFO_MTU) == null)
+                        ? String.valueOf(Const.DEFAULT_SERVICE_INFO_MTU_SIZE)
+                        : (System.getProperties().getProperty(PROPERTY_SERVICE_INFO_MTU));
+        ownerServiceInfoMtuSize = Integer.parseInt(deviceMtuPropertyValue);
+        logger.info("Maximum serviceinfo size that device can receive: " + ownerServiceInfoMtuSize);
+      }
+
+      // maximum size service info that device can receive from owner (i.e) OwnerServiceInfoMTU
+      @Override
+      public int getMaxOwnerServiceInfoMtuSz() {
+        return ownerServiceInfoMtuSize;
+      }
+
+      // maximum size service info that device can send to owner (i.e) DeviceServiceInfoMTU
+      @Override
+      public int getMaxDeviceServiceInfoMtuSz() {
+        return deviceServiceInfoMtuSize;
+      }
+
+      @Override
+      public void setMaxDeviceServiceInfoMtuSz(int mtu) {
+        deviceServiceInfoMtuSize = mtu;
+      }
+
+      @Override
       public Composite getNextServiceInfo() {
         if (isServiceinfoDone) {
           return ServiceInfoEncoder.encodeDeviceServiceInfo(Collections.EMPTY_LIST, false);
         } else {
           ServiceInfoMarshaller marshaller = new ServiceInfoMarshaller(
-              SERVICEINFO_MTU,
-              wrappedCreds.get().getAsUuid(Const.DC_GUID));
+                  getMaxDeviceServiceInfoMtuSz(),
+                  wrappedCreds.get().getAsUuid(Const.DC_GUID));
           marshaller.register(new DeviceServiceInfoModule());
           Iterable<Supplier<ServiceInfo>> serviceInfos = marshaller.marshal();
           List<Composite> marshaledSvi = new LinkedList<>();

@@ -104,6 +104,26 @@ public class To2Test extends BaseTemplate {
       }
 
       @Override
+      public void setMaxDeviceServiceInfoMtuSz(int mtu) {
+
+      }
+
+      @Override
+      public int getMaxDeviceServiceInfoMtuSz() {
+        return Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+      }
+
+      @Override
+      public void setMaxOwnerServiceInfoMtuSz() {
+
+      }
+
+      @Override
+      public int getMaxOwnerServiceInfoMtuSz() {
+        return Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+      }
+
+      @Override
       public Composite getDeviceCredentials() {
         return deviceCreds;
       }
@@ -308,7 +328,22 @@ public class To2Test extends BaseTemplate {
       public boolean getOwnerResaleSupport() {
         return true;
       }
-  
+
+      @Override
+      public int getMaxDeviceServiceInfoMtuSz() {
+        return Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+      }
+
+      @Override
+      public void setMaxOwnerServiceInfoMtuSz(int mtu) {
+
+      }
+
+      @Override
+      public int getMaxOwnerServiceInfoMtuSz() {
+        return Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+      }
+
       public void setSigInfoA(Composite sigInfoA) {
       }
     };

@@ -190,6 +190,26 @@ public class To2ClientApp {
     public void setServiceInfo(Composite info, boolean isMore, boolean isDone) {
 
     }
+
+    @Override
+    public void setMaxDeviceServiceInfoMtuSz(int mtu) {
+
+    }
+
+    @Override
+    public int getMaxDeviceServiceInfoMtuSz() {
+      return Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+    }
+
+    @Override
+    public void setMaxOwnerServiceInfoMtuSz() {
+
+    }
+
+    @Override
+    public int getMaxOwnerServiceInfoMtuSz() {
+      return Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+    }
   };
 
   To2ClientService clientService = new To2ClientService() {

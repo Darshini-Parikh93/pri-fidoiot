@@ -152,13 +152,13 @@ public abstract class To2ServerService extends MessagingService {
     getStorage().continued(request, reply);
   }
 
-  protected void doAuthDone(Composite request, Composite reply) {
+  protected void doDeviceServiceInfoReady(Composite request, Composite reply) {
     getStorage().continuing(request, reply);
     Composite body = request.getAsComposite(Const.SM_BODY);
     Composite message = Composite.fromObject(getCryptoService().decrypt(body,
         getStorage().getOwnerState()));
 
-    Object hmacObj = message.get(Const.FIRST_KEY);
+    Object hmacObj = message.getAsComposite(Const.FIRST_KEY).get(Const.FIRST_KEY);
     if (!hmacObj.equals(Optional.empty())) {
       try {
         // check if its Composite type
@@ -173,10 +173,23 @@ public abstract class To2ServerService extends MessagingService {
       }
     }
 
-    Composite payload = Const.EMPTY_MESSAGE;
+    int ownerMtu = 0;
+    Object maxOwnerServiceInfoSz = message.get(Const.SECOND_KEY);
+    if (!maxOwnerServiceInfoSz.equals(Optional.empty())) {
+      try {
+        ownerMtu = message.getAsNumber(Const.SECOND_KEY).intValue();
+      } catch (IllegalArgumentException r) {
+        ownerMtu = Const.DEFAULT_SERVICE_INFO_MTU_SIZE;
+      }
+    }
+    getStorage().setMaxOwnerServiceInfoMtuSz(ownerMtu);
+
+    Composite payload = Composite.newArray();
+    payload.set(Const.FIRST_KEY, getStorage().getMaxDeviceServiceInfoMtuSz());
+
     body = getCryptoService().encrypt(payload.toBytes(),
         getStorage().getOwnerState());
-    reply.set(Const.SM_MSG_ID, Const.TO2_AUTH_DONE2);
+    reply.set(Const.SM_MSG_ID, Const.TO2_OWNER_SERVICE_INFO_READY);
     reply.set(Const.SM_BODY, body);
 
     getStorage().prepareServiceInfo();
@@ -282,8 +295,8 @@ public abstract class To2ServerService extends MessagingService {
       case Const.TO2_PROVE_DEVICE:
         doProveDevice(request, reply);
         return false;
-      case Const.TO2_AUTH_DONE:
-        doAuthDone(request, reply);
+      case Const.TO2_DEVICE_SERVICE_INFO_READY:
+        doDeviceServiceInfoReady(request, reply);
         return false;
       case Const.TO2_DEVICE_SERVICE_INFO:
         doDeviceInfo(request, reply);
