@@ -312,7 +312,7 @@ public class To2StorageTest {
 
       @Override
       public void setMaxDeviceServiceInfoMtuSz(int mtu) {
-
+        prepareServiceInfo();
       }
 
       @Override

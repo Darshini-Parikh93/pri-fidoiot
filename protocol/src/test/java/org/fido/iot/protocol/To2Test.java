@@ -105,7 +105,7 @@ public class To2Test extends BaseTemplate {
 
       @Override
       public void setMaxDeviceServiceInfoMtuSz(int mtu) {
-
+        prepareServiceInfo();
       }
 
       @Override

@@ -330,7 +330,6 @@ public abstract class To2ClientService extends DeviceService {
     }
     getStorage().setMaxDeviceServiceInfoMtuSz(deviceMtu);
 
-    getStorage().prepareServiceInfo();
     Composite payload = getStorage().getNextServiceInfo();
     body = getCryptoService().encrypt(payload.toBytes(), this.ownState);
     reply.set(Const.SM_MSG_ID, Const.TO2_DEVICE_SERVICE_INFO);

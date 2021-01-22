@@ -162,7 +162,7 @@ public class To2AsymkexTest extends BaseTemplate {
 
       @Override
       public void setMaxDeviceServiceInfoMtuSz(int mtu) {
-
+        prepareServiceInfo();
       }
 
       @Override
