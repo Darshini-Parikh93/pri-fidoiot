@@ -123,6 +123,10 @@ public class ProtocolHandler implements Runnable {
             Const.HTTP_BEARER + " " + info.getAsString(Const.PI_TOKEN));
       }
 
+      //set keep-alive
+      response.addHeader("Connection", "Keep-Alive");
+      response.addHeader("Keep-Alive", "timeout=2000");
+
       //send the body
       byte[] body = reply.getAsComposite(Const.SM_BODY).toBytes();
       response.setContentLength(body.length);
