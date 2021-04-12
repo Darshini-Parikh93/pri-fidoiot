@@ -25,6 +25,7 @@ import java.util.function.Predicate;
 import org.fidoalliance.fdo.protocol.Composite;
 import org.fidoalliance.fdo.protocol.Const;
 import org.fidoalliance.fdo.serviceinfo.FdoSys;
+import org.fidoalliance.fdo.serviceinfo.FdoWget;
 import org.fidoalliance.fdo.serviceinfo.Module;
 
 /**
@@ -87,6 +88,18 @@ public class DeviceSysModule implements Module {
         break;
       case FdoSys.KEY_EXEC:
         exec(kvPair.getAsComposite(Const.SECOND_KEY));
+        break;
+      case FdoWget.KEY_ACTIVE:
+        System.out.println("Fdo_Wget module activated");
+        break;
+      case FdoWget.KEY_FILENAME:
+        System.out.println("Fdo_Wget: filename received");
+        break;
+      case FdoWget.KEY_URL:
+        System.out.println("Fdo_Wget: url received");
+        break;
+      case FdoWget.KEY_SHA:
+        System.out.println("Fdo_Wget: sha384 hash received");
         break;
       default:
         break;
